@@ -1,3 +1,4 @@
 secrets.py
 venv/
 .cache
+google_client_secret.json

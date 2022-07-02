@@ -5,3 +5,5 @@ datetime
 requests
 icalendar
 spotipy
+gspread
+oauth2client

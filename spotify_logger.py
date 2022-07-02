@@ -6,6 +6,8 @@ import requests
 from icalendar import vDatetime
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 
 import secrets
 
@@ -64,7 +66,7 @@ def main ():
     try:
       playback_data = spotify.current_playback()
     except Exception as e:
-      print(" ! Encountered error while polling for spotify api data:")
+      print(f" {colors.fg.red}! Encountered error while polling for spotify api data:{colors.reset}")
       print(e)
       continue
 
@@ -98,7 +100,7 @@ def main ():
           raw_end = shift.split("DTEND:")[1].split("\\")[0][:-1]
           end = vDatetime.from_ical(raw_end).replace(tzinfo=None)
           
-          now = datetime(2022, 7, 1, 2, 30, 0, )#datetime.utcnow()
+          now = datetime.utcnow()#datetime(2022, 7, 1, 2, 30, 0, )
           
           if now > start and now < end:
             employee = " ".join(shift.split("SUMMARY:")[1].split(" ")[:2])
@@ -110,14 +112,40 @@ def main ():
 
         print('Gathering track data...')
         track = spotify.track(current_track_id)
-        track_name = track['name']
         track_artists = ", ".join([artist['name'] for artist in track['artists']])
-        print(f" - {colors.fg.cyan}Track: {track_name} - {track_artists} [{current_track_id}]{colors.reset}")
+        print(f" - {colors.fg.cyan}Track: {track['name']} - {track_artists} [{current_track_id}]{colors.reset}")
         
         playlist = spotify.playlist(playback_data['context']['uri'].split(":")[2])
         print(f" - {colors.fg.cyan}Playlist: {playlist['name']} - {playlist['owner']['display_name']} [{playlist['id']}]{colors.reset}")
         
+        print("Aggregating data")
+        entry = []
+        with open('track_log.csv', 'r') as f:
+          entry.append(len(f.readlines()))
+
+        entry.append(", ".join(current_employees))
+        entry.append(track['name'])
+        entry.append(current_track_id)
+        entry.append(track_artists)
+
         print("Logging collected data")
+        with open('track_log.csv', 'a', newline='\n') as f:
+          writer = csv.writer(f)
+          writer.writerow(entry)
+
+        print("Uploading data to cloud")
+        credentials = ServiceAccountCredentials.from_json_keyfile_name('google_client_secret.json', ["https://spreadsheets.google.com/feeds", 'https://www.googleapis.com/auth/spreadsheets', "https://www.googleapis.com/auth/drive.file", "https://www.googleapis.com/auth/drive"])
+        client = gspread.authorize(credentials)
+        print("Authorized google sheets access\nWriting csv data to sheet")
+
+        spreadsheet = client.open_by_key(secrets.SPREADSHEET_KEY)
+        worksheet = spreadsheet.worksheet("Raw data")
+        worksheet_rows = len(worksheet.col_values(1))
+        for i in range(len(entry)):
+          worksheet.update_cell(worksheet_rows + 1, i + 1, entry[i])
+        
+          
+        #worksheet.update_title("Raw data")
         
         print("Polling for new playback data...")
 
