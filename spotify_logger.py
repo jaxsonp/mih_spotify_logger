@@ -1,5 +1,4 @@
 import os
-from shutil import ExecError
 import time
 import csv
 from datetime import datetime
@@ -10,6 +9,7 @@ from spotipy.oauth2 import SpotifyOAuth
 import gspread
 from gspread import utils
 from oauth2client.service_account import ServiceAccountCredentials
+import multiprocessing as mp
 
 import secrets
 
@@ -49,7 +49,48 @@ class colors:
         cyan='\033[46m'
         lightgrey='\033[47m'
 
+
+
+
+def write_to_sheet (entry):
+
+  try:
+    print("Uploading data to cloud")
+    credentials = ServiceAccountCredentials.from_json_keyfile_name('google_client_secret.json', ["https://spreadsheets.google.com/feeds", 'https://www.googleapis.com/auth/spreadsheets', "https://www.googleapis.com/auth/drive.file", "https://www.googleapis.com/auth/drive"])
+    client = gspread.authorize(credentials)
+    print("Authorized google sheets access\nWriting csv data to sheet")
+
+    spreadsheet = client.open_by_key(secrets.SPREADSHEET_KEY)
+    print("Found spreadsheet")
+    worksheet = spreadsheet.worksheet("raw_data")
+    print("Found worksheet")
+    worksheet_rows = len(worksheet.col_values(1))
+    
+    range = utils.rowcol_to_a1(worksheet_rows + 1, 1) + ":" + utils.rowcol_to_a1(worksheet_rows + 1, len(entry))
+    print(f' - Range: {colors.fg.cyan}{range}{colors.reset}')
+    cell_list = worksheet.range(range)
+    for cell in cell_list:
+      cell.value = entry[cell.col - 1]
+      print(f' - Uploading {colors.fg.cyan}{round(100 * (cell.col - 1) / len(entry), 2)}%{colors.reset}', end="\r")
+      time.sleep(0.1)
+    worksheet.update_cells(cell_list)
+
+    print(f' - Uploading {colors.fg.cyan}100.00%{colors.reset}')
+  
+  except Exception as e:
+
+    print(f"\n{colors.fg.red}\n ! Encountered error while writing to google sheet:{colors.reset}")
+    print(e)
+    return False
+
+  return True
+
+
+
+
 def main ():
+
+  mp.set_start_method('spawn')
   
   # auth
   os.system("cls")
@@ -86,7 +127,10 @@ def main ():
       try:
         if playback_data != None and current_track_id != playback_data['item']['id']:
 
-          print(f"{colors.fg.lightgreen} > Detected new track <{colors.reset}\nVerifying device...")
+          print(f"{colors.fg.lightgreen} > Detected new track <{colors.reset}")
+          print(f"UTC Timestamp: {datetime.utcnow().time()}")
+          
+          print("Verifying device...")
           current_track_id = playback_data['item']['id']
 
           if (playback_data['device']['name'] == 'Cafe TV' and playback_data['device']['type'] == 'TV') or bypass_device_filter:
@@ -207,51 +251,31 @@ def main ():
             new_entry.append(context['type'])
             new_entry.append(",".join(genres))
 
-            print("Logging collected data")
+            while True:
+              
+              sheet_writer_thread = mp.Process(target=write_to_sheet,args=(new_entry,))
+              sheet_writer_thread.start()
+              sheet_writer_thread.join(timeout=30)
+
+              if sheet_writer_thread.exitcode == 0:
+                break
+              else:
+                print(f"{colors.fg.red} ! Sheet writer thread timed out, retrying... {colors.reset}")
+                sheet_writer_thread.kill()
+              
+            print("Logging collected data to csv")
             with open('track_log.csv', 'a', newline='\n', encoding='utf-16') as f:
               writer = csv.writer(f)
               writer.writerow(new_entry)
 
-            print("Uploading data to cloud")
-            credentials = ServiceAccountCredentials.from_json_keyfile_name('google_client_secret.json', ["https://spreadsheets.google.com/feeds", 'https://www.googleapis.com/auth/spreadsheets', "https://www.googleapis.com/auth/drive.file", "https://www.googleapis.com/auth/drive"])
-            client = gspread.authorize(credentials)
-            print("Authorized google sheets access\nWriting csv data to sheet")
-
-            upload_complete = False
-            while upload_complete != True:
-
-              try:
-                spreadsheet = client.open_by_key(secrets.SPREADSHEET_KEY)
-                print("Found spreadsheet")
-                worksheet = spreadsheet.worksheet("raw_data")
-                print("Found worksheet")
-                worksheet_rows = len(worksheet.col_values(1))
-                
-                range = utils.rowcol_to_a1(worksheet_rows + 1, 1) + ":" + utils.rowcol_to_a1(worksheet_rows + 1, len(new_entry))
-                print(f' - Range: {colors.fg.cyan}{range}{colors.reset}')
-                cell_list = worksheet.range(range)
-                for cell in cell_list:
-                  cell.value = new_entry[cell.col - 1]
-                  print(f' - Uploading {colors.fg.cyan}{round(100 * (cell.col - 1) / len(new_entry), 2)}%{colors.reset}', end="\r")
-                  time.sleep(0.1)
-                worksheet.update_cells(cell_list)
-
-                print(f' - Uploading {colors.fg.cyan}100.00%{colors.reset}')
-
-                upload_complete = True
-
-              except Exception as e:
-                print(f"\n{colors.fg.red}\n ! Encountered error while writing data to Google sheets:{colors.reset}")
-                print(e)
-                print('\nTrying again...')
             
-            print("Done!\nPolling for new playback data...")
+            print(f"{colors.fg.lightgreen}Done!{colors.reset}\nPolling new playback data...")
             time.sleep(15)
 
           
           else:
             print(f"{colors.fg.red}Listening on Invalid device: {playback_data['device']['name']} ({playback_data['device']['type']}){colors.reset}")
-            print("Polling for new playback data...")
+            print("Polling new playback data...")
 
       except Exception as e:
         print(f"\n{colors.fg.red}\n ! Encountered unhandled error during excecution:{colors.reset}")
@@ -267,11 +291,6 @@ def main ():
 if __name__ == '__main__':
   print('\n\n\n')
   main()
-
-
-
-
-
 
 
 
